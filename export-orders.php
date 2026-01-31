@@ -1,390 +1,1 @@
-<?php
-/*
-Plugin Name: خروجی سفارشات
-Plugin URI: https://jamilweb.ir
-Description: خروجی اطلاعات سفارشات
-Version: 1.0.1
-Author: Jamil Moradian
-Author URI: https://jamilweb.ir
-*/
-
-{
-    /**
-     * Localisation
-     **/
-    load_plugin_textdomain('woo-export-order', false, dirname(plugin_basename(__FILE__)) . '/');
-
-    /**
-     * woo_export class
-     **/
-    if (!class_exists('woo_export')) {
-
-        class woo_export
-        {
-
-            public function __construct()
-            {
-
-                $this->order_status = array(
-                    'completed'     => __('تکمیل شده', 'woo-export-order'),
-                    'cancelled'     => __('لغو شده', 'woo-export-order'),
-                    'failed'        => __('ناموفق', 'woo-export-order'),
-                    'refunded'      => __('بازپرداخت شده', 'woo-export-order'),
-                    'processing'    => __('در حال پردازش', 'woo-export-order'),
-                    'pending'       => __('در انتظار', 'woo-export-order'),
-                    'on-hold'       => __('در انتظار بررسی', 'woo-export-order'),
-                );
-
-                // WordPress Administration Menu
-                add_action('admin_menu', array(&$this, 'woo_export_orders_menu'));
-
-                add_action('admin_enqueue_scripts', array(&$this, 'export_enqueue_scripts_css'));
-                add_action('admin_enqueue_scripts', array(&$this, 'export_enqueue_scripts_js'));
-                add_action('wp_ajax_export_orders_by_date', array($this, 'export_orders_by_date'));
-            }
-
-            /**
-             * Functions
-             */
-
-            function export_enqueue_scripts_css()
-            {
-                if (isset($_GET['page']) && $_GET['page'] == 'export_orders_page') {
-                    wp_enqueue_style('semantic', plugins_url('/css/semantic.min.css', __FILE__), '', '', false);
-                    wp_enqueue_style('semanticDataTable', plugins_url('/css/dataTables.semanticui.min.css', __FILE__), '', '', false);
-                    wp_enqueue_style('semanticButtons', plugins_url('/css/buttons.semanticui.min.css', __FILE__), '', '', false);
-                    wp_enqueue_style('dataTable', plugins_url('/css/data.table.css', __FILE__), '', '', false);
-                    wp_enqueue_style('jquery-ui-datepicker', '//code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css');
-                }
-            }
-
-            function export_enqueue_scripts_js()
-            {
-                if (isset($_GET['page']) && $_GET['page'] == 'export_orders_page') {
-                    wp_register_script('dataTable', plugins_url('/js/jquery.dataTables.js', __FILE__));
-                    wp_enqueue_script('dataTable');
-
-                    wp_register_script('dataTableSemantic', plugins_url('/js/dataTables.semanticui.min.js', __FILE__));
-                    wp_enqueue_script('dataTableSemantic');
-
-                    wp_register_script('dataTableButtons', plugins_url('/js/dataTables.buttons.min.js', __FILE__));
-                    wp_enqueue_script('dataTableButtons');
-
-                    wp_register_script('buttonsSemantic', plugins_url('/js/buttons.semanticui.min.js', __FILE__));
-                    wp_enqueue_script('buttonsSemantic');
-
-                    wp_register_script('woo_pdfmake', plugins_url('/js/pdfmake.min.js', __FILE__));
-                    wp_enqueue_script('woo_pdfmake');
-
-                    wp_register_script('jszip', plugins_url('/js/jszip.min.js', __FILE__));
-                    wp_enqueue_script('jszip');
-
-                    wp_register_script('vfsfonts', plugins_url('/js/vfs_fonts.js', __FILE__));
-                    wp_enqueue_script('vfsfonts');
-
-                    wp_register_script('buttonsHTML5', plugins_url('/js/buttons.html5.min.js', __FILE__));
-                    wp_enqueue_script('buttonsHTML5');
-
-                    wp_enqueue_script('jquery-ui-datepicker');
-
-                    // Register custom script for handling date filter
-                    wp_register_script('custom-script', plugins_url('/js/custom-script.js', __FILE__), array('jquery'), '1.0', true);
-                    wp_enqueue_script('custom-script');
-
-                    // Localize the script with new data
-                    $ajax_nonce = wp_create_nonce('export_orders_by_date_nonce');
-                    wp_localize_script('custom-script', 'ajax_obj', array(
-                        'ajax_url' => admin_url('admin-ajax.php'),
-                        'nonce'    => $ajax_nonce,
-                    ));
-                }
-            }
-
-            function woo_export_orders_menu()
-            {
-                add_menu_page(
-                    'Export Orders',
-                    'خروجی سفارشات',
-                    'manage_woocommerce',
-                    'export_orders_page',
-                    array(&$this, 'export_orders_page'),
-                    'dashicons-media-spreadsheet',
-                    '55.7'
-                );
-                add_submenu_page('export_orders_page', __('Export Orders Settings', 'woo-export-order'), __('Export Orders Settings', 'woo-export-order'), 'manage_woocommerce', 'export_orders_page', array(&$this, 'export_orders_page'));
-            }
-
-            function export_orders_page()
-            {
-                ?>
-                <div class="wrap">
-                    <br>
-                    <form id="export-orders-form" method="post" action="" style="display: flex; align-items: center;">
-                        <div style="margin-right: 20px;">
-                            <label for="start_date"><?php _e('از تاریخ', 'woo-export-order'); ?></label>
-                            <input type="text" id="start_date" name="start_date" value="" />
-
-                            <label for="start_time"><?php _e('از ساعت', 'woo-export-order'); ?></label>
-                            <input type="time" id="start_time" name="start_time" value="" />
-
-                            <label for="end_date"><?php _e('تا تاریخ', 'woo-export-order'); ?></label>
-                            <input type="text" id="end_date" name="end_date" value="" />
-
-                            <label for="end_time"><?php _e('تا ساعت', 'woo-export-order'); ?></label>
-                            <input type="time" id="end_time" name="end_time" value="" />
-
-                            <button type="button" id="filter_orders"><?php _e('فیلتر', 'woo-export-order'); ?></button>
-                        </div>
-                        <div style="margin-right: 20px;">
-                            <label for="page_length"><?php _e('تعداد ردیف‌های نمایش داده شده در هر صفحه', 'woo-export-order'); ?></label>
-                            <select id="page_length" name="page_length">
-                                <option value="5">5</option>
-                                <option value="10">10</option>
-                                <option value="20">20</option>
-                                <option value="50">50</option>
-                                <option value="100">100</option>
-                            </select>
-                        </div>
-                    </form>
-                    <br>
-
-                    <table id="order_history" class="ui celled table" cellspacing="0" width="100%">
-                        <thead>
-                            <tr>
-                                <th><?php _e('نام محصولات', 'woo-export-order'); ?></th>
-                                <th><?php _e('تعداد محصولات', 'woo-export-order'); ?></th>
-                                <th><?php _e('مجموع مبلغ', 'woo-export-order'); ?></th>
-                                <th><?php _e('تاریخ سفارش', 'woo-export-order'); ?></th>
-                                <th><?php _e('نام خریدار', 'woo-export-order'); ?></th>
-                                <th><?php _e('مبلغ تخفیف', 'woo-export-order'); ?></th>
-                                <th><?php _e('هزینه ارسال', 'woo-export-order'); ?></th>
-                                <th><?php _e('آدرس حمل و نقل', 'woo-export-order'); ?></th>
-                                <th><?php _e('شماره تماس', 'woo-export-order'); ?></th>
-                                <th><?php _e('روش ارسال', 'woo-export-order'); ?></th> <!-- ستون جدید -->
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php echo $this->get_order_rows(); ?>
-                        </tbody>
-                    </table>
-                </div>
-
-                <script>
-                    jQuery(document).ready(function ($) {
-                        $("#start_date, #end_date").datepicker({
-                            dateFormat: 'yy-mm-dd'
-                        });
-
-                        // Initialize the DataTable
-                        var oTable = $("#order_history").DataTable({
-                            "bSortClasses": false,
-                            "aaSorting": [[0, 'desc']],
-                            "bAutoWidth": true,
-                            "bInfo": true,
-                            "bScrollCollapse": true,
-                            "sPaginationType": "full_numbers",
-                            "bRetrieve": true,
-                            "pageLength": 5, // Default value
-                            "oLanguage": {
-                                "sSearch": "جستجو:",
-                                "sInfo": "نمایش _START_ تا _END_ از _TOTAL_ مورد",
-                                "sInfoEmpty": "نمایش 0 تا 0 از 0 مورد",
-                                "sZeroRecords": "هیچ موردی یافت نشد",
-                                "sInfoFiltered": "(فیلتر شده از مجموع _MAX_ مورد)",
-                                "sEmptyTable": "اطلاعاتی موجود نیست",
-                                "sLengthMenu": "نمایش _MENU_ مورد",
-                                "pageLength": 5, // Default value
-                                "oPaginate": {
-                                    "sFirst": "ابتدا",
-                                    "sPrevious": "قبلی",
-                                    "sNext": "بعدی",
-                                    "sLast": "انتها"
-                                }
-                            },
-                            dom: 'Bfrtip',
-                            buttons: [
-                                {
-                                    extend: 'excelHtml5',
-                                    text: 'دانلود فایل به صورت اکسل',
-                                    className: 'ui button',
-                                    exportOptions: {
-                                        columns: ':visible'
-                                    }
-                                },
-                            ]
-                        });
-
-                        // Set the page length based on the dropdown value
-                        $('#page_length').on('change', function () {
-                            var pageLength = $(this).val();
-                            oTable.page.len(pageLength).draw();
-                        });
-
-                        // Handle the filter button click event
-                        $('#filter_orders').on('click', function () {
-                            var startDate = $('#start_date').val();
-                            var startTime = $('#start_time').val();
-                            var endDate = $('#end_date').val();
-                            var endTime = $('#end_time').val();
-
-                            if (startDate && startTime && endDate && endTime) {
-                                $.ajax({
-                                    url: ajax_obj.ajax_url,
-                                    type: 'POST',
-                                    data: {
-                                        action: 'export_orders_by_date',
-                                        start_date: startDate,
-                                        start_time: startTime,
-                                        end_date: endDate,
-                                        end_time: endTime,
-                                        security: ajax_obj.nonce
-                                    },
-                                    success: function (response) {
-                                        $('#order_history tbody').html(response);
-                                    }
-                                });
-                            } else {
-                                alert('لطفاً تمام فیلدهای تاریخ و زمان را پر کنید.');
-                            }
-                        });
-                    });
-                </script>
-            <?php
-            }
-
-            function get_order_rows()
-            {
-                $args = array(
-                    'limit' => -1,
-                );
-
-                $orders = wc_get_orders($args);
-
-                $html = '';
-
-                foreach ($orders as $order) {
-                    $order_items = $order->get_items();
-
-                    foreach ($order_items as $items_key => $items_value) {
-                        $product_name = $items_value->get_name(); // نام محصول
-                        $product_quantity = $items_value->get_quantity(); // تعداد خرید
-                        $product_price = $items_value->get_subtotal(); // قیمت محصول
-                        $customer_name = $order->get_billing_first_name() . ' ' . $order->get_billing_last_name(); // نام خریدار
-                        $order_discount = $order->get_total_discount();
-                        $order_shipping = $order->get_shipping_total();
-                        $shipping_address = $order->get_shipping_address_1() . ' ' . $order->get_shipping_address_2() . ', ' . $order->get_shipping_city() . ', ' . $order->get_shipping_postcode();
-                        $contact_number = $order->get_billing_phone();
-                        $shipping_method = $order->get_shipping_method(); // روش ارسال
-
-                        // استخراج ویژگی‌های انتخاب‌شده
-                        $product_variation = '';
-                        $item_data = $items_value->get_formatted_meta_data('_', true);
-
-                        if (!empty($item_data)) {
-                            $product_variation .= ' (';
-                            foreach ($item_data as $meta) {
-                                $product_variation .= $meta->display_key . ': ' . $meta->display_value . ', ';
-                            }
-                            $product_variation = rtrim($product_variation, ', ') . ')';
-                        }
-
-                        $html .= "<tr>
-                            <td>" . $product_name . $product_variation . "</td> <!-- نام محصول به همراه ویژگی‌ها -->
-                            <td>" . $product_quantity . "</td>
-                            <td>" . wc_price($product_price) . "</td> <!-- قیمت محصول -->
-                            <td>" . date_i18n('Y/m/d', strtotime($order->get_date_created())) . "</td>
-                            <td>" . $customer_name . "</td>
-                            <td>" . wc_price($order_discount) . "</td>
-                            <td>" . wc_price($order_shipping) . "</td>
-                            <td>" . $shipping_address . "</td>
-                            <td>" . $contact_number . "</td>
-                            <td>" . $shipping_method . "</td> <!-- داده روش ارسال -->
-                        </tr>";
-                    }
-                }
-
-                return $html;
-            }
-
-
-            function export_orders_by_date()
-            {
-                check_ajax_referer('export_orders_by_date_nonce', 'security');
-
-                $start_date = sanitize_text_field($_POST['start_date']);
-                $start_time = sanitize_text_field($_POST['start_time']);
-                $end_date = sanitize_text_field($_POST['end_date']);
-                $end_time = sanitize_text_field($_POST['end_time']);
-
-                $start_datetime = new DateTime($start_date . ' ' . $start_time);
-                $end_datetime = new DateTime($end_date . ' ' . $end_time);
-
-                $start_datetime_formatted = $start_datetime->format('Y-m-d H:i:s');
-                $end_datetime_formatted = $end_datetime->format('Y-m-d H:i:s');
-
-                $args = array(
-                    'limit' => -1,
-                    'date_query' => array(
-                        'after' => $start_datetime_formatted,
-                        'before' => $end_datetime_formatted,
-                        'inclusive' => true,
-                    ),
-                );
-
-                $orders = wc_get_orders($args);
-
-                $html = '';
-
-                foreach ($orders as $order) {
-                    $order_items = $order->get_items();
-
-                    foreach ($order_items as $items_key => $items_value) {
-                        $product_name = $items_value->get_name(); // نام محصول
-                        $product_quantity = $items_value->get_quantity(); // تعداد خرید
-                        $product_price = $items_value->get_subtotal(); // قیمت محصول
-                        $customer_name = $order->get_billing_first_name() . ' ' . $order->get_billing_last_name(); // نام خریدار
-                        $order_discount = $order->get_total_discount();
-                        $order_shipping = $order->get_shipping_total();
-                        $shipping_address = $order->get_shipping_address_1() . ' ' . $order->get_shipping_address_2() . ', ' . $order->get_shipping_city() . ', ' . $order->get_shipping_postcode();
-                        $contact_number = $order->get_billing_phone();
-                        $shipping_method = $order->get_shipping_method(); // روش ارسال
-                    
-                        // استخراج ویژگی‌های انتخاب‌شده
-                        $product_variation = '';
-                        $item_data = $items_value->get_formatted_meta_data('_', true);
-                    
-                        if (!empty($item_data)) {
-                            $product_variation .= ' (';
-                            foreach ($item_data as $meta) {
-                                $product_variation .= $meta->display_key . ': ' . $meta->display_value . ', ';
-                            }
-                            $product_variation = rtrim($product_variation, ', ') . ')';
-                        }
-                    
-                        $html .= "<tr>
-                            <td>" . $product_name . $product_variation . "</td> <!-- نام محصول به همراه ویژگی‌ها -->
-                            <td>" . $product_quantity . "</td>
-                            <td>" . wc_price($product_price) . "</td> <!-- قیمت محصول -->
-                            <td>" . date_i18n('Y/m/d', strtotime($order->get_date_created())) . "</td>
-                            <td>" . $customer_name . "</td>
-                            <td>" . wc_price($order_discount) . "</td>
-                            <td>" . wc_price($order_shipping) . "</td>
-                            <td>" . $shipping_address . "</td>
-                            <td>" . $contact_number . "</td>
-                            <td>" . $shipping_method . "</td> <!-- داده روش ارسال -->
-                        </tr>";
-                    }                    
-                }
-
-                echo $html;
-
-                wp_die();
-            }
-
-
-        }
-    }
-
-    $GLOBALS['woo_export'] = new woo_export();
-}
-?>
+<?php/** * Plugin Name: Woo Export Orders - ReadyStudio Edition * Description: افزونه خروجی سفارشات ووکامرس با رابط کاربری اختصاصی ردی استودیو. * Version: 2.1.1 * Author: ReadyStudio | Fazel Ghaemi * Author URI: https://readystudio.ir/ * Text Domain: woo-export-ready */if (!defined('ABSPATH')) {    exit;}class Woo_Export_Orders_Ready {    private static $instance = null;    public static function get_instance() {        if (self::$instance == null) {            self::$instance = new self();        }        return self::$instance;    }    private function __construct() {        add_action('admin_menu', [$this, 'add_admin_menu']);        add_action('wp_ajax_weom_fetch_orders', [$this, 'handle_fetch_orders']);        add_action('wp_ajax_weom_export_csv', [$this, 'handle_export_csv']);    }    public function add_admin_menu() {        add_submenu_page(            'woocommerce',            'خروجی سفارشات',            'خروجی سفارشات',            'manage_woocommerce',            'woo-export-orders-ready',            [$this, 'render_admin_page']        );    }    public function render_admin_page() {        ?>        <div class="wrap weom-wrapper">            <div class="weom-header">                <div class="header-title">                    <h1 class="wp-heading-inline">مدیریت سفارشات</h1>                    <span class="weom-brand">ReadyStudio Edition</span>                </div>                <a href="https://readystudio.ir/" target="_blank" class="weom-logo-link">                    طراحی شده توسط ReadyStudio                </a>            </div>                        <!-- Toolbar: Filters & Actions Combined -->            <div class="weom-card weom-toolbar">                <div class="weom-filters-row">                    <div class="weom-input-group">                        <label>از تاریخ</label>                        <input type="date" id="date_from" class="weom-input" placeholder="تاریخ شروع">                    </div>                                        <div class="weom-input-group">                        <label>تا تاریخ</label>                        <input type="date" id="date_to" class="weom-input" placeholder="تاریخ پایان">                    </div>                    <div class="weom-input-group">                        <label>تعداد</label>                        <select id="limit" class="weom-input">                            <option value="10" selected>10 سطر</option>                            <option value="25">25 سطر</option>                            <option value="50">50 سطر</option>                            <option value="100">100 سطر</option>                        </select>                    </div>                    <div class="weom-actions-group">                        <button id="btn-filter" class="weom-btn weom-btn-primary">                            <span class="dashicons dashicons-filter"></span> اعمال فیلتر                        </button>                        <button id="btn-reset" class="weom-btn weom-btn-text" title="پاک کردن فیلترها">                            <span class="dashicons dashicons-image-rotate"></span>                        </button>                    </div>                </div>                <div class="weom-export-section">                    <button id="btn-export" class="weom-btn weom-btn-outline">                        <span class="dashicons dashicons-download"></span> خروجی اکسل                    </button>                </div>            </div>            <!-- Data Table -->            <div class="weom-card weom-table-card">                <div id="loading-bar" class="weom-loading-bar hidden"></div>                <div class="table-responsive">                    <table class="weom-table">                        <thead>                            <tr>                                <th width="80"># سفارش</th>                                <th>نام خریدار</th>                                <th>شماره تماس</th>                                <th>مبلغ کل</th>                                <th>وضعیت</th>                                <th>تاریخ ثبت</th>                                <th>اقلام سفارش</th>                            </tr>                        </thead>                        <tbody id="orders-tbody">                            <!-- JS Injection -->                        </tbody>                    </table>                </div>                                <div id="empty-state" class="weom-empty-state hidden">                    <span class="dashicons dashicons-search"></span>                    <p>سفارشی با این مشخصات یافت نشد.</p>                </div>            </div>            <!-- Pagination -->            <div class="weom-footer">                <div class="weom-pagination" id="pagination-container"></div>                <div class="weom-stats" id="stats-container"></div>            </div>        </div>        <style>            :root {                --ready-color: #00b0a4;                --ready-color-hover: #008f85;                --text-main: #3c434a;                --text-light: #646970;                --bg-light: #f0f0f1;                --border-color: #dcdcde;                --white: #ffffff;            }            .weom-wrapper {                direction: rtl;                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;                margin: 20px 20px 0 0;                max-width: 1200px;            }            /* Header */            .weom-header {                display: flex;                align-items: center;                justify-content: space-between;                margin-bottom: 20px;            }            .header-title {                display: flex;                align-items: center;                gap: 10px;            }            .weom-brand {                font-size: 12px;                color: var(--ready-color);                font-weight: 600;                background: rgba(0, 176, 164, 0.1);                padding: 4px 10px;                border-radius: 20px;                letter-spacing: 0.5px;            }            .weom-logo-link {                font-size: 12px;                color: var(--text-light);                text-decoration: none;                transition: color 0.2s;            }            .weom-logo-link:hover {                color: var(--ready-color);            }            /* Cards */            .weom-card {                background: var(--white);                border: 1px solid var(--border-color);                border-radius: 8px;                box-shadow: 0 2px 5px rgba(0,0,0,0.02);                margin-bottom: 20px;                overflow: hidden;            }            /* Toolbar */            .weom-toolbar {                padding: 15px 20px;                display: flex;                flex-wrap: wrap;                align-items: center;                justify-content: space-between;                gap: 15px;            }            .weom-filters-row {                display: flex;                align-items: flex-end;                gap: 15px;                flex-wrap: wrap;            }                        /* Inputs */            .weom-input-group {                display: flex;                flex-direction: column;                gap: 5px;            }            .weom-input-group label {                font-size: 12px;                color: var(--text-light);                font-weight: 500;            }            .weom-input {                height: 36px;                border: 1px solid #8c8f94;                border-radius: 4px;                padding: 0 10px;                font-size: 13px;                color: var(--text-main);                transition: border-color 0.2s;            }            .weom-input:focus {                border-color: var(--ready-color);                box-shadow: 0 0 0 1px var(--ready-color);                outline: none;            }            /* Buttons */            .weom-btn {                height: 36px;                display: inline-flex;                align-items: center;                justify-content: center;                gap: 6px;                padding: 0 16px;                border-radius: 4px;                font-size: 13px;                font-weight: 500;                cursor: pointer;                transition: all 0.2s;                text-decoration: none;                border: 1px solid transparent;            }            .weom-btn-primary {                background-color: var(--ready-color);                color: #fff;            }            .weom-btn-primary:hover {                background-color: var(--ready-color-hover);                color: #fff;            }            .weom-btn-outline {                background-color: transparent;                border: 1px solid var(--ready-color);                color: var(--ready-color);            }            .weom-btn-outline:hover {                background-color: rgba(0, 176, 164, 0.05);            }            .weom-btn-text {                background: transparent;                color: #d63638;                padding: 0 10px;            }            .weom-btn-text:hover {                background: #fdf2f2;            }            /* Table */            .weom-table-card {                padding: 0;                position: relative;            }            .weom-table {                width: 100%;                border-collapse: collapse;                font-size: 13px;            }            .weom-table th {                background: #f8f9fa;                color: var(--text-light);                font-weight: 600;                text-align: right;                padding: 15px;                border-bottom: 1px solid var(--border-color);            }            .weom-table td {                padding: 12px 15px;                border-bottom: 1px solid #f0f0f1;                color: var(--text-main);                vertical-align: middle;            }            .weom-table tr:hover td {                background-color: #fcfcfc;            }            .weom-table tr:last-child td {                border-bottom: none;            }            /* Badges & Status */            .product-badge {                display: inline-block;                background: #fff;                border: 1px solid #e2e4e7;                border-radius: 12px;                padding: 2px 10px;                font-size: 11px;                color: var(--text-light);                margin: 2px;            }            .order-status {                display: inline-block;                padding: 3px 8px;                border-radius: 4px;                font-size: 11px;                font-weight: 600;                background: #e5e5e5;                 color: #555;            }            .status-completed { background: #c6e1c6; color: #5b841b; }            .status-processing { background: #c8d7e1; color: #2e4453; }            .status-on-hold { background: #f8dda7; color: #94660c; }            .status-cancelled { background: #e5e5e5; color: #777; }            .status-failed { background: #eba3a3; color: #761919; }            /* Loading Bar */            .weom-loading-bar {                height: 3px;                background: linear-gradient(90deg, transparent, var(--ready-color), transparent);                background-size: 200% 100%;                animation: loading 1.5s infinite linear;                position: absolute;                top: 0;                left: 0;                width: 100%;                z-index: 10;            }            @keyframes loading {                0% { background-position: 200% 0; }                100% { background-position: -200% 0; }            }            /* Empty State */            .weom-empty-state {                padding: 40px;                text-align: center;                color: var(--text-light);            }            .weom-empty-state .dashicons {                font-size: 40px;                width: 40px;                height: 40px;                margin-bottom: 10px;                color: #dcdcde;            }            /* Pagination */            .weom-footer {                display: flex;                justify-content: space-between;                align-items: center;                margin-top: 15px;            }            .weom-pagination {                display: flex;                gap: 4px;            }            .weom-page-btn {                min-width: 32px;                height: 32px;                border: 1px solid var(--border-color);                background: #fff;                color: var(--text-main);                border-radius: 4px;                cursor: pointer;                display: flex;                align-items: center;                justify-content: center;                font-size: 12px;                transition: all 0.2s;            }            .weom-page-btn:hover:not(:disabled) {                border-color: var(--ready-color);                color: var(--ready-color);            }            .weom-page-btn.active {                background: var(--ready-color);                border-color: var(--ready-color);                color: #fff;            }            .weom-page-btn:disabled {                opacity: 0.5;                cursor: default;            }            .weom-stats {                font-size: 12px;                color: var(--text-light);            }            .hidden { display: none; }        </style>        <script>            document.addEventListener('DOMContentLoaded', () => {                                class OrderManager {                    constructor() {                        this.state = {                            page: 1,                            limit: 10,                            date_from: '',                            date_to: '',                            total_pages: 1,                            total_items: 0                        };                                                this.elements = {                            tbody: document.getElementById('orders-tbody'),                            pagination: document.getElementById('pagination-container'),                            stats: document.getElementById('stats-container'),                            loading: document.getElementById('loading-bar'),                            emptyState: document.getElementById('empty-state'),                            btnFilter: document.getElementById('btn-filter'),                            btnReset: document.getElementById('btn-reset'),                            btnExport: document.getElementById('btn-export'),                            inputFrom: document.getElementById('date_from'),                            inputTo: document.getElementById('date_to'),                            selectLimit: document.getElementById('limit')                        };                        this.initListeners();                        this.fetchOrders();                    }                    initListeners() {                        this.elements.btnFilter.addEventListener('click', () => {                            this.state.page = 1;                            this.updateStateFromDOM();                            this.fetchOrders();                        });                        this.elements.btnReset.addEventListener('click', () => {                            this.elements.inputFrom.value = '';                            this.elements.inputTo.value = '';                            this.elements.selectLimit.value = '10';                            this.state.page = 1;                            this.updateStateFromDOM();                            this.fetchOrders();                        });                        this.elements.selectLimit.addEventListener('change', () => {                            this.state.page = 1;                            this.updateStateFromDOM();                            this.fetchOrders();                        });                        this.elements.btnExport.addEventListener('click', () => this.exportData());                    }                    updateStateFromDOM() {                        this.state.date_from = this.elements.inputFrom.value;                        this.state.date_to = this.elements.inputTo.value;                        this.state.limit = this.elements.selectLimit.value;                    }                    async fetchOrders() {                        this.setLoading(true);                                                const formData = new FormData();                        formData.append('action', 'weom_fetch_orders');                        formData.append('security', '<?php echo wp_create_nonce("weom_nonce"); ?>');                        formData.append('page', this.state.page);                        formData.append('limit', this.state.limit);                        formData.append('date_from', this.state.date_from);                        formData.append('date_to', this.state.date_to);                        try {                            const response = await fetch(ajaxurl, { method: 'POST', body: formData });                            const result = await response.json();                                                        if (result.success) {                                this.state.total_pages = result.data.total_pages;                                this.state.total_items = result.data.total_orders;                                this.renderTable(result.data.orders);                                this.renderPagination();                                this.renderStats();                            } else {                                alert('خطا: ' + (result.data || 'Unknown error'));                            }                        } catch (error) {                            console.error('Fetch Error:', error);                        } finally {                            this.setLoading(false);                        }                    }                    setLoading(isLoading) {                        if (isLoading) {                            this.elements.loading.classList.remove('hidden');                            this.elements.tbody.style.opacity = '0.5';                        } else {                            this.elements.loading.classList.add('hidden');                            this.elements.tbody.style.opacity = '1';                        }                    }                    renderTable(orders) {                        this.elements.tbody.innerHTML = '';                                                if (orders.length === 0) {                            this.elements.emptyState.classList.remove('hidden');                            return;                        }                                                this.elements.emptyState.classList.add('hidden');                        const html = orders.map(order => `                            <tr>                                <td><b>#${order.id}</b></td>                                <td>${order.customer}</td>                                <td>${order.phone}</td>                                <td>${order.total}</td>                                <td><span class="order-status status-${order.status}">${order.status_label}</span></td>                                <td style="direction:ltr; text-align:right">${order.date}</td>                                <td>${order.items.map(i => `<span class="product-badge">${i}</span>`).join(' ')}</td>                            </tr>                        `).join('');                        this.elements.tbody.innerHTML = html;                    }                    renderPagination() {                        let html = '';                        const total = this.state.total_pages;                        const current = parseInt(this.state.page);                        if (total <= 1) {                            this.elements.pagination.innerHTML = '';                            return;                        }                        // Prev                        html += `<button class="weom-page-btn" ${current === 1 ? 'disabled' : ''} data-page="${current - 1}"><span class="dashicons dashicons-arrow-right-alt2"></span></button>`;                        for (let i = 1; i <= total; i++) {                            if (i === 1 || i === total || (i >= current - 2 && i <= current + 2)) {                                html += `<button class="weom-page-btn ${i === current ? 'active' : ''}" data-page="${i}">${i}</button>`;                            } else if (i === current - 3 || i === current + 3) {                                html += `<span style="padding:0 5px; color:#aaa">...</span>`;                            }                        }                        // Next                        html += `<button class="weom-page-btn" ${current === total ? 'disabled' : ''} data-page="${current + 1}"><span class="dashicons dashicons-arrow-left-alt2"></span></button>`;                        this.elements.pagination.innerHTML = html;                        this.elements.pagination.querySelectorAll('.weom-page-btn').forEach(btn => {                            btn.addEventListener('click', (e) => {                                const btnEl = e.target.closest('.weom-page-btn');                                if (!btnEl.disabled) {                                    this.state.page = parseInt(btnEl.dataset.page);                                    this.fetchOrders();                                }                            });                        });                    }                    renderStats() {                        const start = ((this.state.page - 1) * this.state.limit) + 1;                        let end = this.state.page * this.state.limit;                        if (end > this.state.total_items) end = this.state.total_items;                                                if(this.state.total_items === 0) {                             this.elements.stats.innerHTML = '';                             return;                        }                        this.elements.stats.innerHTML = `نمایش ${start} تا ${end} از ${this.state.total_items} سفارش`;                    }                    exportData() {                        const params = new URLSearchParams({                            action: 'weom_export_csv',                            security: '<?php echo wp_create_nonce("weom_nonce"); ?>',                            date_from: this.state.date_from,                            date_to: this.state.date_to                        });                        window.open(ajaxurl + '?' + params.toString(), '_blank');                    }                }                new OrderManager();            });        </script>        <?php    }    /**     * AJAX & Export logic remains the same (Safe & Secure)     */    public function handle_fetch_orders() {        check_ajax_referer('weom_nonce', 'security');        if (!current_user_can('manage_woocommerce')) wp_send_json_error('عدم دسترسی');        $page = isset($_POST['page']) ? intval($_POST['page']) : 1;        $limit = isset($_POST['limit']) ? intval($_POST['limit']) : 10;        $date_from = isset($_POST['date_from']) ? sanitize_text_field($_POST['date_from']) : '';        $date_to = isset($_POST['date_to']) ? sanitize_text_field($_POST['date_to']) : '';        $args = ['limit' => $limit, 'page' => $page, 'paginate' => true];        if ($date_from || $date_to) {            $args['date_created'] = '';            if ($date_from) $args['date_created'] .= '>' . $date_from . '...';            if ($date_to) $args['date_created'] .= '<' . $date_to;        }        $query = wc_get_orders($args);        $orders = [];        foreach ($query->orders as $order) {            $items = [];            foreach ($order->get_items() as $item) {                $items[] = $item->get_name() . ' (' . $item->get_quantity() . ')';            }            $date_str = function_exists('jdate') ? jdate('Y/m/d H:i', $order->get_date_created()->getTimestamp()) : $order->get_date_created()->date('Y-m-d H:i');                        $orders[] = [                'id' => $order->get_id(),                'customer' => $order->get_formatted_billing_full_name() ?: 'مهمان',                'phone' => $order->get_billing_phone(),                'total' => strip_tags(wc_price($order->get_total())),                'status' => $order->get_status(),                'status_label' => wc_get_order_status_name($order->get_status()),                'date' => $date_str,                'items' => $items            ];        }        wp_send_json_success([            'orders' => $orders,            'total_pages' => $query->max_num_pages,            'total_orders' => $query->total        ]);    }    public function handle_export_csv() {        check_ajax_referer('weom_nonce', 'security');        if (!current_user_can('manage_woocommerce')) wp_die('عدم دسترسی');        $date_from = isset($_GET['date_from']) ? sanitize_text_field($_GET['date_from']) : '';        $date_to = isset($_GET['date_to']) ? sanitize_text_field($_GET['date_to']) : '';        $args = ['limit' => -1];        if ($date_from || $date_to) {            $args['date_created'] = '';            if ($date_from) $args['date_created'] .= '>' . $date_from . '...';            if ($date_to) $args['date_created'] .= '<' . $date_to;        }                $orders = wc_get_orders($args);        header('Content-Type: text/csv; charset=utf-8');        header('Content-Disposition: attachment; filename=readystudio-export-' . date('Y-m-d') . '.csv');                $output = fopen('php://output', 'w');        fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF));        fputcsv($output, ['ID', 'نام خریدار', 'تلفن', 'مبلغ', 'وضعیت', 'تاریخ', 'محصولات']);        foreach ($orders as $order) {            $items = [];            foreach ($order->get_items() as $item) {                $items[] = $item->get_name() . ' (' . $item->get_quantity() . ')';            }            $date_str = function_exists('jdate') ? jdate('Y/m/d H:i', $order->get_date_created()->getTimestamp()) : $order->get_date_created()->date('Y-m-d H:i');            fputcsv($output, [                $order->get_id(),                $order->get_formatted_billing_full_name(),                $order->get_billing_phone(),                $order->get_total(),                wc_get_order_status_name($order->get_status()),                $date_str,                implode(' | ', $items)            ]);        }        fclose($output);        exit;    }}Woo_Export_Orders_Ready::get_instance();
